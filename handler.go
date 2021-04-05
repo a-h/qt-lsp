@@ -7,16 +7,29 @@ import (
 
 	"github.com/sourcegraph/go-lsp"
 	"github.com/sourcegraph/jsonrpc2"
+	"go.uber.org/zap"
 )
 
 type Handler struct {
 	jsonrpc2.Handler
+	log *zap.Logger
+}
+
+func NewHandler(logger *zap.Logger) Handler {
+	return Handler{
+		log: logger,
+	}
 }
 
 // Handle implements jsonrpc2.Handler
 func (h Handler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) {
-	//TODO: Check for errors and log etc.
-	h.internal(ctx, conn, req)
+	h.log.Info("request", zap.Any("req", req))
+	resp, err := h.internal(ctx, conn, req)
+	if err != nil {
+		h.log.Error("response", zap.Error(err))
+		return
+	}
+	h.log.Info("response", zap.Any("resp", resp))
 }
 
 func (h Handler) internal(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (result interface{}, err error) {
