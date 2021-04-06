@@ -2,14 +2,53 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
+	"os/signal"
 
 	"github.com/sourcegraph/jsonrpc2"
 	"go.uber.org/zap"
 )
 
+const (
+	exitCodeErr       = 1
+	exitCodeInterrupt = 2
+)
+
 func main() {
+	ctx := context.Background()
+	ctx, cancel := context.WithCancel(ctx)
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt)
+	defer func() {
+		signal.Stop(signalChan)
+		cancel()
+	}()
+	go func() {
+		select {
+		case <-signalChan: // first signal, cancel context
+			cancel()
+		case <-ctx.Done():
+		}
+		<-signalChan // second signal, hard exit
+		os.Exit(exitCodeInterrupt)
+	}()
+	if err := run(ctx, os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(exitCodeErr)
+	}
+}
+
+type rpcLogger struct {
+	zapLogger *zap.Logger
+}
+
+func (l rpcLogger) Printf(format string, v ...interface{}) {
+	l.zapLogger.Info(fmt.Sprintf(format, v...))
+}
+
+func run(ctx context.Context, args []string) error {
 	cfg := zap.NewProductionConfig()
 	cfg.OutputPaths = []string{
 		"/Users/adrian/github.com/a-h/qt-lsp/log.txt",
@@ -22,7 +61,20 @@ func main() {
 	defer logger.Sync()
 	logger.Info("Starting up...")
 	handler := NewHandler(logger)
-	<-jsonrpc2.NewConn(context.Background(), jsonrpc2.NewBufferedStream(stdrwc{}, jsonrpc2.VSCodeObjectCodec{}), handler).DisconnectNotify()
+
+	stream := jsonrpc2.NewBufferedStream(stdrwc{}, jsonrpc2.VSCodeObjectCodec{})
+	rpcLogger := jsonrpc2.LogMessages(rpcLogger{zapLogger: logger})
+	conn := jsonrpc2.NewConn(ctx, stream, handler, rpcLogger)
+	select {
+	case <-ctx.Done():
+		logger.Info("Signal received")
+		conn.Close()
+	case <-conn.DisconnectNotify():
+		logger.Info("Client disconnected")
+	}
+
+	logger.Info("Stopped...")
+	return nil
 }
 
 type stdrwc struct{}

@@ -26,10 +26,14 @@ func (h Handler) Handle(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.
 	h.log.Info("request", zap.Any("req", req))
 	resp, err := h.internal(ctx, conn, req)
 	if err != nil {
-		h.log.Error("response", zap.Error(err))
+		h.log.Error("error creating response", zap.Error(err))
 		return
 	}
 	h.log.Info("response", zap.Any("resp", resp))
+	err = conn.Reply(ctx, req.ID, resp)
+	if err != nil {
+		h.log.Error("error sending response", zap.Error(err))
+	}
 }
 
 func (h Handler) internal(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc2.Request) (result interface{}, err error) {
@@ -45,8 +49,7 @@ func (h Handler) internal(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 				TextDocumentSync: &lsp.TextDocumentSyncOptionsOrKind{
 					Kind: &kind,
 				},
-				//TODO: Implement that completion provider?
-				CompletionProvider:     nil,
+				CompletionProvider:     &lsp.CompletionOptions{ResolveProvider: true, TriggerCharacters: []string{"(", "."}},
 				DefinitionProvider:     true,
 				TypeDefinitionProvider: true,
 				DocumentSymbolProvider: true,
@@ -120,8 +123,7 @@ func (h Handler) internal(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 		if err := json.Unmarshal(*req.Params, &params); err != nil {
 			return nil, err
 		}
-		//return h.handleTextDocumentCompletion(ctx, conn, req, params)
-		return nil, nil
+		return h.handleTextDocumentCompletion(ctx, conn, req, params)
 
 	case "textDocument/implementation":
 		if req.Params == nil {
@@ -146,4 +148,27 @@ func (h Handler) internal(ctx context.Context, conn *jsonrpc2.Conn, req *jsonrpc
 		return nil, nil
 	}
 	return nil, &jsonrpc2.Error{Code: jsonrpc2.CodeMethodNotFound, Message: fmt.Sprintf("method not supported: %s", req.Method)}
+}
+
+func (h Handler) handleTextDocumentCompletion(ctx context.Context, conn jsonrpc2.JSONRPC2, req *jsonrpc2.Request, params lsp.CompletionParams) (*lsp.CompletionList, error) {
+	citems := []lsp.CompletionItem{
+		{
+			Kind:             lsp.CIKConstant,
+			Label:            "A constant",
+			Detail:           "Its type",
+			InsertTextFormat: lsp.ITFPlainText,
+			InsertText:       "New Text",
+			TextEdit: &lsp.TextEdit{
+				Range: lsp.Range{
+					Start: lsp.Position{Line: params.Position.Line, Character: params.Position.Character - len("New Text")},
+					End:   lsp.Position{Line: params.Position.Line, Character: params.Position.Character},
+				},
+				NewText: "New Text",
+			},
+		},
+	}
+	return &lsp.CompletionList{
+		IsIncomplete: false,
+		Items:        citems,
+	}, nil
 }
